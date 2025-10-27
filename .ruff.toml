@@ -1,0 +1,84 @@
+line-length = 120
+indent-width = 4
+target-version = "py311"
+
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "tests/*",
+    "examples/*",
+    "notebooks/*",
+]
+
+[lint]
+select = [ #got from tinygrad
+    "F",    # Pyflakes
+    "W6",
+    "E71",
+    "E72",
+    "E112", # no-indented-block
+    "E113", # unexpected-indentation
+    # "E124",
+    "E203", # whitespace-before-punctuation
+    "E272", # multiple-spaces-before-keyword
+    "E275", # missing-whitespace-after-keyword
+    "E303", # too-many-blank-lines
+    "E304", # blank-line-after-decorator
+    "E501", # line-too-long
+    # "E502",
+    "E702",    # multiple-statements-on-one-line-semicolon
+    "E703",    # useless-semicolon
+    "E731",    # lambda-assignment
+    "W191",    # tab-indentation
+    "W291",    # trailing-whitespace
+    "W293",    # blank-line-with-whitespace
+    "UP039",   # unnecessary-class-parentheses
+    "C416",    # unnecessary-comprehension
+    "RET506",  # superfluous-else-raise
+    "RET507",  # superfluous-else-continue
+    "A",       # builtin-variable-shadowing, builtin-argument-shadowing, builtin-attribute-shadowing
+    "SIM105",  # suppressible-exception
+    "FURB110", # if-exp-instead-of-or-operator
+    "RUF018",  # assignment-in-assert
+]
+ignore = ["PLR0915"]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[per-file-ignores]
+"notebooks/**/*" = [
+    "F401", # unused imports
+    "F811", # redefinition of unused name
+    "F821", # undefined name
+    "F841", # unused variable
+    "E402", # module level import not at top of file
+    "E501", # line too long
+]
+"**/*.ipynb" = ["F401", "F811", "F821", "F841", "E402", "E501"]
+"*.ipynb" = ["F401", "F811"]
