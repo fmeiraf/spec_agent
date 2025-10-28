@@ -1,0 +1,95 @@
+import asyncio
+import random
+from asyncio import TaskGroup
+from typing import Awaitable, Callable, Iterable, List
+
+from spec_agent.spec import SubTask
+
+
+async def run_scheduler(
+    initial: Iterable[SubTask],
+    handle_async_work: Callable[[SubTask], Awaitable[SubTask]],
+    handle_review: Callable[[SubTask], Awaitable[List[SubTask]]],
+) -> None:
+    review_queue: asyncio.Queue[SubTask] = asyncio.Queue()
+    in_flight = 0
+
+    async def spawn(tg: TaskGroup, task: SubTask):
+        nonlocal in_flight
+        in_flight += 1
+
+        async def runner():
+            nonlocal in_flight
+            try:
+                result_task = await handle_async_work(task)
+                await review_queue.put(result_task)
+            finally:
+                in_flight -= 1
+
+        tg.create_task(runner())
+
+    async with TaskGroup() as tg:
+        # seed first round
+        for task in initial:
+            await spawn(tg, task)
+
+        # Single consumer: strictly sequential reviews
+        while True:
+            # If nothing in flight, also drain queue and exit when empty
+            if in_flight == 0 and review_queue.empty():
+                break
+
+            result_task = await review_queue.get()  # blocks; ensures order of handling
+            followups = await handle_review(result_task)  # strictly sequential
+
+            for task in followups:
+                await spawn(tg, task)
+
+
+# --- demo ---
+if __name__ == "__main__":
+
+    async def do_async_work(task: SubTask, *, max_delay: float = 1.5) -> SubTask:
+        # Simulate variable latency + outcome
+        await asyncio.sleep(random.uniform(0.1, max_delay))
+        success = random.random() > 0.2  # 80% pass
+        round_num = int(task.context.get("round", 0))
+        # Return task with updated result payload
+        return SubTask(
+            id=task.id,
+            description=task.description,
+            context=task.context,
+            result={"ok": success, "round": round_num},
+        )
+
+    async def professor_review(task_result: SubTask) -> List[SubTask]:
+        """
+        Handle results sequentially (this function is called by exactly one consumer).
+        It may decide to spawn follow-up tasks (new async jobs).
+        """
+        round_num = int(task_result.context.get("round", 0))
+        sid = task_result.context.get("id")
+        ok = bool(task_result.result.get("ok")) if isinstance(task_result.result, dict) else bool(task_result.result)
+        # Synchronous/ordered logic: print in order for demonstration
+        print(f"[REVIEW] round={round_num} id={sid} -> ok={ok}")
+
+        followups: List[SubTask] = []
+        if not ok and round_num < 3:
+            # Ask the same student for a revision (new async job)
+            new_ctx = dict(task_result.context)
+            new_ctx["round"] = round_num + 1
+            followups.append(
+                SubTask(
+                    id=task_result.id,
+                    description=task_result.description,
+                    context=new_ctx,
+                    result=None,
+                )
+            )
+        return followups
+
+    initial = [
+        SubTask(id=f"task-{i}", description=f"task-{i}", context={"id": i, "round": 0}, result=None) for i in range(5)
+    ]
+
+    asyncio.run(run_scheduler(initial, do_async_work, professor_review))
