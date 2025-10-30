@@ -5,7 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 authors = [{ name = "Fernando Meira", email = "fmeira.filho@gmail.com" }]
 requires-python = ">=3.14"
-dependencies = ["litellm>=1.79.0", "pydantic>=2.12.3"]
+dependencies = [
+    "jinja2>=3.1.6",
+    "litellm>=1.79.0",
+    "pydantic>=2.12.3",
+]
 
 [project.scripts]
 spec-agent = "spec_agent:main"
