@@ -4,6 +4,7 @@ from typing import Any, List
 
 from dotenv import load_dotenv
 from jinja2 import Template
+from langfuse import observe
 from pydantic import BaseModel, Field
 
 from spec_agent.actors import (ActorConfig, Profile, Supervisor, Worker,
@@ -25,6 +26,7 @@ class DataVizWorker(Worker):
         model="gpt-5-mini",
     )
 
+    @observe(name="spec_agent.worker.perform_work")
     async def perform_work(self, subtask: SubTask, **_: Any) -> SubTask:
         try:
             inference_result = await self.llm.acompletion(
@@ -74,7 +76,7 @@ class DataVizSupervisor(Supervisor):
         
         return self.user_prompt_initial_assignment.render(spec=str(self.spec), current_plot_function=current_plot_function)
     
-
+    @observe(name="spec_agent.first_assignment")
     async def handle_first_assignment(self, current_plot_function: str, *_, **kwargs: Any) -> List[SubTask]:
         try:
             system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
@@ -94,6 +96,7 @@ class DataVizSupervisor(Supervisor):
         except Exception:
             raise RuntimeError("Error generating initial tasks")
 
+    @observe(name="spec_agent.review")
     async def review(self, subtask: SubTask, *_, **kwargs: Any) -> List[SubTask]:
         # Approve if a result exists and ok=True
         pass
@@ -132,7 +135,6 @@ VizSpec = Spec(
             task_output_format=json.dumps(TaskOutputFormat.model_json_schema()),
         ),
     },
-    output_format=json.dumps(SpecOutputFormat.model_json_schema()),
 )
 # --- task assets --- 
 
@@ -412,7 +414,7 @@ def create_plot(df):`
     return svg_string
 """
 
-
+@observe(name="spec_agent")
 async def main() -> None:
     agent = SpecAgent(supervisor=DataVizSupervisor())
     result = await agent.complete_spec(spec=VizSpec, spec_output_format=SpecOutputFormat, task_output_format=TaskOutputFormat, current_plot_function=CURRENT_PLOT_FUNCTION, data_frame=data)

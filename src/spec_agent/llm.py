@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import litellm
+from langfuse import observe
 
 
 class Client(ABC):
@@ -47,6 +48,7 @@ class LiteLLMClient(Client):
                 end="\n\n",
             )
 
+    @observe(name="spec_agent.llm.acompletion")
     async def acompletion(
         self,
         messages: list[dict[str, str]] | str,

@@ -25,7 +25,9 @@ class SubItem(BaseModel):
 
 class SubTaskDetails(BaseModel):
     task_description: str
-    actor_name: str
+    supervisor_diagnosis: str
+    assigned_actor_name: str
+    assigned_subitem_type: str
 
 
 class SubTask(BaseModel):
@@ -55,9 +57,6 @@ class Spec(BaseModel):
     all_subitems: Dict[str, SubItem] = Field(default_factory=dict)
     status: Literal["pending", "in_progress", "completed", "failed"] = Field(default="pending")
     version: int = Field(default=1)
-    output_format: str = Field(
-        description="The output format of the spec. This is a JSON schema that describes the output of the spec."
-    )
     final_result: Any | None = Field(default=None)
 
     @model_validator(mode="after")
