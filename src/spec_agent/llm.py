@@ -29,11 +29,30 @@ class LiteLLMClient(Client):
         self.client = litellm.completion
         self.aclient = litellm.acompletion
 
+    def debug_messages(self, messages: list[dict[str, str]] | str) -> None:
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+        elif isinstance(messages, dict):
+            messages = [messages]
+
+        from rich import print as rprint
+
+        for message in messages:
+            rprint(
+                f"""
+            role: [bold]{message["role"]}[/bold]
+
+            content: {message["content"]}
+            """,
+                end="\n\n",
+            )
+
     async def acompletion(
         self,
         messages: list[dict[str, str]] | str,
         max_tokens: Optional[int] = None,
         timeout: Optional[int] = None,
+        debug: bool = True,
         **kwargs,
     ) -> str:
         try:
@@ -41,6 +60,9 @@ class LiteLLMClient(Client):
                 messages = [{"role": "user", "content": messages}]
             elif isinstance(messages, dict):
                 messages = [messages]
+
+            if debug:
+                self.debug_messages(messages)
 
             response = await self.aclient(
                 model=self.model,

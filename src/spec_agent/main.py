@@ -1,20 +1,49 @@
 from logging import getLogger
-from typing import Optional
+from typing import Any, List, Optional
 
-from spec_agent.actors import Reviewer
+from pydantic import BaseModel
+
+from spec_agent.actors import SubTask, Supervisor
 from spec_agent.spec import Spec
 
 logger = getLogger(__name__)
 
 
 class SpecAgent:
-    def __init__(self, reviewer: Reviewer, timeout: Optional[int] = None):
-        self.reviewer = reviewer
+    def __init__(
+        self,
+        supervisor: Supervisor,
+        worker_pool_size: int = 3,
+        timeout: Optional[int] = None,
+    ):
+        self.supervisor = supervisor
+        self.worker_pool_size = worker_pool_size
         self.timeout = timeout
+
+    def _initialize(
+        self, spec: Spec, spec_output_format: BaseModel, task_output_format: BaseModel, **kwargs: Any
+    ) -> None:
+        self.supervisor.spec = spec
+        self.supervisor.spec_output_format = spec_output_format
+        self.supervisor.task_output_format = task_output_format
+
+        for key, value in kwargs.items():
+            setattr(self.supervisor, key, value)
 
     async def complete_spec(
         self,
         spec: Spec,
-        **kwargs,
+        spec_output_format: BaseModel,
+        task_output_format: BaseModel,
+        **kwargs: Any,
     ) -> Spec:
-        pass
+        self._initialize(spec, spec_output_format, task_output_format, **kwargs)
+        initial_tasks: List[SubTask] = await self.supervisor.handle_first_assignment(
+            spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
+        )
+
+        from rich import print as rprint
+
+        rprint(initial_tasks)
+
+        # await run_scheduler(initial=generate_initial_tasks, supervisor=self.supervisor)

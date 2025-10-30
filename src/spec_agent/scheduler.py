@@ -1,30 +1,34 @@
 import asyncio
 import random
 from asyncio import TaskGroup
-from typing import Awaitable, Callable, Iterable, List
+from typing import Iterable, List
 
+from spec_agent.actors import Supervisor
 from spec_agent.spec import SubTask
 
 
 async def run_scheduler(
-    initial: Iterable[SubTask],
-    handle_async_work: Callable[[SubTask], Awaitable[SubTask]],
-    handle_review: Callable[[SubTask], Awaitable[List[SubTask]]],
+    initial: Iterable[SubTask], supervisor: Supervisor, max_workers: int = 3, max_rounds: int = 10
 ) -> None:
     review_queue: asyncio.Queue[SubTask] = asyncio.Queue()
     in_flight = 0
+    rounds = 0
+    worker_sem = asyncio.Semaphore(max_workers)
 
     async def spawn(tg: TaskGroup, task: SubTask):
-        nonlocal in_flight
+        nonlocal in_flight, rounds
+        await worker_sem.acquire()
         in_flight += 1
+        rounds += 1
 
         async def runner():
             nonlocal in_flight
             try:
-                result_task = await handle_async_work(task)
+                result_task = await supervisor.get_worker_job_function(task.subitem.type)(task)
                 await review_queue.put(result_task)
             finally:
                 in_flight -= 1
+                worker_sem.release()
 
         tg.create_task(runner())
 
@@ -36,11 +40,11 @@ async def run_scheduler(
         # Single consumer: strictly sequential reviews
         while True:
             # If nothing in flight, also drain queue and exit when empty
-            if in_flight == 0 and review_queue.empty():
+            if (in_flight == 0 and review_queue.empty()) or rounds >= max_rounds:
                 break
 
             result_task = await review_queue.get()  # blocks; ensures order of handling
-            followups = await handle_review(result_task)  # strictly sequential
+            followups = await supervisor.review(result_task)  # strictly sequential
 
             for task in followups:
                 await spawn(tg, task)
