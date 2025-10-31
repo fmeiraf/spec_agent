@@ -1,6 +1,6 @@
 import uuid
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Dict, List, Literal, Optional, Set, Type
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -58,6 +58,11 @@ class Spec(BaseModel):
     status: Literal["pending", "in_progress", "completed", "failed"] = Field(default="pending")
     version: int = Field(default=1)
     final_result: Any | None = Field(default=None)
+    spec_output_format: Optional[Type[BaseModel]] = Field(default=None, exclude=True)
+    task_output_format: Optional[Type[BaseModel]] = Field(default=None, exclude=True)
+
+    class Config:
+        arbitrary_types_allowed = True
 
     @model_validator(mode="after")
     def validate_subitems_type(self) -> "Spec":
@@ -78,9 +83,10 @@ class Spec(BaseModel):
             all_subitems=deepcopy(self.all_subitems),
             status=self.status,
             final_result=deepcopy(self.final_result),
+            spec_output_format=self.spec_output_format,
         )
 
-    def merge_subitem(self, item_id: str, subitem: SubItem, *, merge_context: bool = True) -> "Spec":
+    def merge_subitem(self, subtask: SubTask, *, merge_context: bool = True) -> "Spec":
         """
         Return a new Spec with the given subitem merged in.
 
@@ -88,21 +94,29 @@ class Spec(BaseModel):
         - If present, updates type/description/result and merges context when requested.
         - Increments version only when an actual change occurs.
         """
-        existing = self.all_subitems.get(item_id)
+        existing = self.all_subitems.get(subtask.subitem.type)
 
         # Fast path: not present yet
         if existing is None:
-            new_spec = self.clone()
-            new_spec.all_subitems[item_id] = deepcopy(subitem)
-            new_spec.version += 1
-            return new_spec
+            raise ValueError(f"Subitem with id {subtask.subitem.type} not found")
 
         # Build merged subitem
         merged = SubItem(
-            type=subitem.type if subitem.type != existing.type else existing.type,
-            description=(subitem.description if subitem.description != existing.description else existing.description),
-            result=subitem.result if subitem.result != existing.result else existing.result,
-            context=({**existing.context, **subitem.context} if merge_context else deepcopy(subitem.context)),
+            type=subtask.subitem.type if subtask.subitem.type != existing.type else existing.type,
+            description=(
+                subtask.subitem.description
+                if subtask.subitem.description != existing.description
+                else existing.description
+            ),
+            context=(
+                {**existing.context, **subtask.subitem.context} if merge_context else deepcopy(subtask.subitem.context)
+            ),
+            task_output_format=subtask.subitem.task_output_format
+            if subtask.subitem.task_output_format != existing.task_output_format
+            else existing.task_output_format,
+            acceptance_criteria=subtask.subitem.acceptance_criteria
+            if subtask.subitem.acceptance_criteria != existing.acceptance_criteria
+            else existing.acceptance_criteria,
         )
 
         # No change detected
@@ -110,12 +124,63 @@ class Spec(BaseModel):
             return self
 
         # Apply change on a cloned spec and bump version
-        new_spec = self.clone()
-        new_spec.all_subitems[item_id] = merged
-        new_spec.version += 1
-        return new_spec
+        self.all_subitems[subtask.subitem.type] = merged
+        self.version += 1
+        return self
 
-    def merge_review(self, review: SubTaskReview, *, merge_context: bool = True) -> "Spec":
+    def set_final_result(self, result: Any) -> "Spec":
+        """
+        Set and validate the final result against the spec output format.
+        Returns a new Spec with the validated result.
+
+        - If spec_output_format is set, validates the result against it
+        - If result is a dict, parses it using the output format
+        - If result is already an instance of the output format, uses it directly
+        - If no output format is set, stores the result as-is
+        """
+        if self.spec_output_format is not None:
+            # Validate and parse the result
+            if isinstance(result, dict):
+                validated_result = self.spec_output_format(**result)
+            elif isinstance(result, self.spec_output_format):
+                validated_result = result
+            else:
+                raise ValueError(
+                    f"Result must be a dict or instance of {self.spec_output_format.__name__}, "
+                    f"got {type(result).__name__}"
+                )
+
+            # Store as dict for serialization
+            final_value = validated_result.model_dump() if hasattr(validated_result, "model_dump") else validated_result
+        else:
+            # No validation if format not specified
+            final_value = result
+
+        self.final_result = final_value
+        return self
+
+    def get_final_result_as_model(self) -> BaseModel | None:
+        """
+        Get the final result as a validated Pydantic model instance.
+
+        Returns:
+            - The final_result as an instance of spec_output_format
+            - None if final_result is None
+
+        Raises:
+            ValueError if spec_output_format is not set
+        """
+        if self.final_result is None:
+            return None
+        if self.spec_output_format is None:
+            raise ValueError("Cannot convert to model: spec_output_format not set")
+        if isinstance(self.final_result, self.spec_output_format):
+            return self.final_result
+        return self.spec_output_format(**self.final_result)
+
+    def merge_review(
+        self, subtask: SubTask, final_result: Optional[Any] = None, *, merge_context: bool = True
+    ) -> "Spec":
         """
         Merge a SubTaskReview into the Spec by updating the linked SubItem state.
 
@@ -124,68 +189,39 @@ class Spec(BaseModel):
         - Merges context from existing subitem, the subitem inside the task, and the task context
         - Records review metadata (is_approved, review_message) in context
         - Updates result only when the review is approved
+        - Validates the final result against spec_output_format if set
         - Increments version only on actual changes
         """
-        subtask = review.subtask
-        item_id = subtask.id
-        task_item = subtask.subitem
+        if final_result is None and subtask.task_result is None:
+            raise ValueError("No final result or task result provided")
 
-        existing = self.all_subitems.get(item_id)
+        existing = self.all_subitems.get(subtask.subitem.type)
 
-        # Create path: no existing subitem for this id
+        # Fast path: not present yet
         if existing is None:
-            # Build new subitem incorporating task subitem + task context + review info
-            base_context = deepcopy(task_item.context)
-            if merge_context:
-                merged_context = {**base_context, **deepcopy(subtask.task_context)}
-            else:
-                merged_context = deepcopy(subtask.task_context)
+            raise ValueError(f"Subitem with id {subtask.subitem.type} not found")
 
-            merged_context["is_approved"] = review.is_approved
-            merged_context["review_message"] = review.review_message
-
-            new_item = SubItem(
-                type=task_item.type,
-                description=task_item.description,
-                context=merged_context,
-                result=deepcopy(subtask.task_result) if review.is_approved else deepcopy(task_item.result),
-            )
-
-            new_spec = self.clone()
-            new_spec.all_subitems[item_id] = new_item
-            new_spec.version += 1
-            return new_spec
-
-        # Update path: merge with existing subitem
-        if merge_context:
-            merged_context = {
-                **deepcopy(existing.context),
-                **deepcopy(task_item.context),
-                **deepcopy(subtask.task_context),
-            }
-        else:
-            merged_context = deepcopy(subtask.task_context)
-
-        merged_context["is_approved"] = review.is_approved
-        merged_context["review_message"] = review.review_message
-
-        merged_item = SubItem(
-            type=task_item.type if task_item.type != existing.type else existing.type,
+        merged = SubItem(
+            type=subtask.subitem.type if subtask.subitem.type != existing.type else existing.type,
             description=(
-                task_item.description if task_item.description != existing.description else existing.description
+                subtask.subitem.description
+                if subtask.subitem.description != existing.description
+                else existing.description
             ),
-            context=merged_context,
-            result=(
-                deepcopy(subtask.task_result)
-                if review.is_approved and subtask.task_result != existing.result
-                else existing.result
-            ),
+            context=subtask.subitem.context if merge_context else deepcopy(subtask.subitem.context),
+            task_output_format=subtask.subitem.task_output_format
+            if subtask.subitem.task_output_format != existing.task_output_format
+            else existing.task_output_format,
+            acceptance_criteria=subtask.subitem.acceptance_criteria
+            if subtask.subitem.acceptance_criteria != existing.acceptance_criteria
+            else existing.acceptance_criteria,
         )
 
-        if merged_item == existing:
-            return self
+        self.all_subitems[subtask.subitem.type] = merged
 
-        new_spec = self.clone()
-        new_spec.all_subitems[item_id] = merged_item
-        new_spec.version += 1
-        return new_spec
+        if final_result is None:
+            final_result = subtask.task_result
+
+        self.set_final_result(final_result)
+        self.version += 1
+        return self

@@ -1,14 +1,17 @@
 import inspect
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable, List, Optional, Type, Union
+from logging import getLogger
+from typing import Any, Callable, List, Optional, Type, Union
 
 from jinja2 import Template
 from pydantic import BaseModel, Field
 
 from spec_agent.llm import Client, LiteLLMClient
 from spec_agent.prompts import SUPERVISOR_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
-from spec_agent.spec import SubTask, SubTaskReview
+from spec_agent.spec import Spec, SubTask, SubTaskReview
+
+logger = getLogger(__name__)
 
 
 class Profile(BaseModel):
@@ -100,6 +103,18 @@ def _validate_abstract_methods_have_kwargs(cls: type) -> None:
                 f"Abstract method '{cls.__name__}.{method_name}' must include '**kwargs' "
                 f"in its signature. Current signature: {sig}"
             )
+
+        if method_name == "perform_work":
+            if "subtask" not in sig.parameters:
+                raise TypeError(
+                    f"Abstract method '{cls.__name__}.{method_name}' must include 'subtask' "
+                    f"in its signature. Current signature: {sig}"
+                )
+            if "spec" not in sig.parameters:
+                raise TypeError(
+                    f"Abstract method '{cls.__name__}.{method_name}' must include 'spec' "
+                    f"in its signature. Current signature: {sig}"
+                )
 
 
 class Actor(ABC):
@@ -228,12 +243,23 @@ class Supervisor(Actor):
         worker = self._workers.get(task_type)
         if worker is None:
             known = ", ".join(sorted(self._workers.keys()))
+            logger.error(f"Unknown task_type '{task_type}'. Known: {known}")
             raise KeyError(f"Unknown task_type '{task_type}'. Known: {known}")
         return worker
 
-    def get_worker_job_function(self, task_type: str) -> Callable[[SubTask], Awaitable[SubTask]]:
+    def get_worker_job_function(self, task_type: str) -> Callable:
         worker = self.get_worker(task_type)
         return worker.perform_work
+
+    def merge_task_to_spec(self, subtask: SubTask, merge_context: bool = True) -> bool:
+        try:
+            if not self.spec:
+                raise ValueError("Spec not initialized")
+            self.spec = self.spec.merge_review(subtask, merge_context=merge_context)
+            return True
+        except Exception as e:
+            logger.error(f"Error merging task to spec: {e}")
+            return False
 
     @abstractmethod
     async def handle_first_assignment(self, **kwargs: Any) -> List[SubTask]:
@@ -255,5 +281,5 @@ class Worker(Actor):
         super().__init__(config, llm, prompt, profile)
 
     @abstractmethod
-    async def perform_work(self, subtask: SubTask, **kwargs: Any) -> SubTask:
+    async def perform_work(self, subtask: SubTask, spec: Spec, **kwargs: Any) -> SubTask:
         pass

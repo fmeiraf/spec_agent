@@ -4,18 +4,18 @@ from asyncio import TaskGroup
 from typing import Iterable, List
 
 from spec_agent.actors import Supervisor
-from spec_agent.spec import SubTask
+from spec_agent.spec import Spec, SubTask
 
 
 async def run_scheduler(
-    initial: Iterable[SubTask], supervisor: Supervisor, max_workers: int = 3, max_rounds: int = 10
+    initial: Iterable[SubTask], supervisor: Supervisor, max_workers: int = 8, max_rounds: int = 10
 ) -> None:
     review_queue: asyncio.Queue[SubTask] = asyncio.Queue()
     in_flight = 0
     rounds = 0
     worker_sem = asyncio.Semaphore(max_workers)
 
-    async def spawn(tg: TaskGroup, task: SubTask):
+    async def spawn(tg: TaskGroup, task: SubTask, spec: Spec):
         nonlocal in_flight, rounds
         await worker_sem.acquire()
         in_flight += 1
@@ -24,7 +24,7 @@ async def run_scheduler(
         async def runner():
             nonlocal in_flight
             try:
-                result_task = await supervisor.get_worker_job_function(task.subitem.type)(task)
+                result_task = await supervisor.get_worker_job_function(task.subitem.type)(subtask=task, spec=spec)
                 await review_queue.put(result_task)
             finally:
                 in_flight -= 1
@@ -35,7 +35,7 @@ async def run_scheduler(
     async with TaskGroup() as tg:
         # seed first round
         for task in initial:
-            await spawn(tg, task)
+            await spawn(tg, task, supervisor.spec)
 
         # Single consumer: strictly sequential reviews
         while True:
@@ -48,7 +48,7 @@ async def run_scheduler(
 
             for task in followups:
                 if rounds < max_rounds:
-                    await spawn(tg, task)
+                    await spawn(tg, task, supervisor.spec)
 
 
 # --- demo ---

@@ -22,8 +22,11 @@ class SpecAgent:
         self.timeout = timeout
 
     def _initialize(
-        self, spec: Spec, spec_output_format: BaseModel, task_output_format: BaseModel, **kwargs: Any
+        self, spec: Spec, spec_output_format: BaseModel, task_output_format: BaseModel, goal_output: Any, **kwargs: Any
     ) -> None:
+        # Set the output format on the spec itself for validation
+        spec.spec_output_format = spec_output_format
+        spec.final_result = goal_output
         self.supervisor.spec = spec
         self.supervisor.spec_output_format = spec_output_format
         self.supervisor.task_output_format = task_output_format
@@ -32,11 +35,7 @@ class SpecAgent:
             setattr(self.supervisor, key, value)
 
         for worker in self.supervisor._workers.values():
-            worker.task_output_format = task_output_format
-            worker.spec_output_format = spec_output_format
-            worker.spec = spec
             worker.config.llm_kwargs = kwargs.get("llm_kwargs", {})
-
             for key, value in kwargs.items():
                 setattr(worker, key, value)
 
@@ -45,12 +44,13 @@ class SpecAgent:
         spec: Spec,
         spec_output_format: BaseModel,
         task_output_format: BaseModel,
+        goal_output: Any,
         **kwargs: Any,
     ) -> Spec:
-        self._initialize(spec, spec_output_format, task_output_format, **kwargs)
+        self._initialize(spec, spec_output_format, task_output_format, goal_output, **kwargs)
         initial_tasks: List[SubTask] = await self.supervisor.handle_first_assignment(
             spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
         )
 
-        final_result = await run_scheduler(initial=initial_tasks, supervisor=self.supervisor)
-        return final_result
+        await run_scheduler(initial=initial_tasks, supervisor=self.supervisor)
+        return self.supervisor.spec
