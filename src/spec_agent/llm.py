@@ -54,7 +54,7 @@ class LiteLLMClient(Client):
         messages: list[dict[str, str]] | str,
         max_tokens: Optional[int] = None,
         timeout: Optional[int] = None,
-        debug: bool = True,
+        debug: bool = False,
         **kwargs,
     ) -> str:
         try:
@@ -73,6 +73,10 @@ class LiteLLMClient(Client):
                 timeout=timeout,
                 **kwargs,
             )
+
+            if kwargs.get("response_format"):
+                return kwargs["response_format"].model_validate_json(response.choices[0].message.content)
+
             return response.choices[0].message.content
         except Exception as e:
             raise RuntimeError(f"Error generating completion: {str(e)}")

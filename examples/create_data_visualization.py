@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, List
+from typing import Any, List, Literal, Optional
 
 from dotenv import load_dotenv
 from jinja2 import Template
@@ -26,36 +26,50 @@ class DataVizWorker(Worker):
         model="gpt-5-mini",
     )
 
+    def render_user_prompt(self, subtask: SubTask) -> str:
+        user_prompt = Template("""
+            Complete the task to the best of your ability without crossing the boundaries of your role, specialty and task.
+
+            Your task is:
+            {{ task }}
+
+            Your task context is:
+            {{ task_context }}
+
+            """)
+        
+        return user_prompt.render(task=subtask.task_details, task_context=subtask.task_context)
+
     @observe(name="spec_agent.worker.perform_work")
     async def perform_work(self, subtask: SubTask, **_: Any) -> SubTask:
         try:
             inference_result = await self.llm.acompletion(
-                messages=self.config.message_history + [
-                    {"role": "user", "content": subtask.task_description},
+                messages=subtask.task_context + [
+                    {"role": "system", "content": self.render_system_prompt(specialty=self.profile.specialty, answer_format=self.task_output_format)},
+                    {"role": "user", "content": self.render_user_prompt(subtask=subtask)},
                 ],
+                response_format=self.task_output_format,
                 **self.config.llm_kwargs,
             )
 
             return SubTask(
                 subitem=subtask.subitem,
-                task_description=subtask.task_description,
-                status="completed",
+                task_details=subtask.task_details,
                 task_result=inference_result,
                 task_context=subtask.task_context + [{"role": "user", "content": inference_result}],
+                status="completed",
             )
         except Exception as e:
-            return SubTask(
-                subitem=subtask.subitem,
-                task_description=subtask.task_description,
-                status="failed",
-                task_error=str(e),
-                task_context=subtask.task_context + [{"role": "user", "content": f"Task generated an error: {str(e)}"}],
-            )
+            raise RuntimeError(f"Error performing work: {str(e)}")
 
 # --- Supervisor that seeds the task and reviews results ---
 
 class TaskList(BaseModel):
     tasks: List[SubTaskDetails] = Field(description="A list of tasks to complete the spec.")
+
+class SubTaskReview(BaseModel):
+    review_result: Literal["approved", "partially_approved", "rejected"]
+    review_comment: str = Field(description="A comment on the review result. This is a comment on the review result that is used to explain the review result.")
 
 class DataVizSupervisor(Supervisor):
     config = ActorConfig(
@@ -75,6 +89,32 @@ class DataVizSupervisor(Supervisor):
                 """)
         
         return self.user_prompt_initial_assignment.render(spec=str(self.spec), current_plot_function=current_plot_function)
+
+    def get_user_prompt_review(self, subtask: SubTask, current_plot_function: str, is_review:bool, review_result: Optional[Literal["approved", "partially_approved", "rejected"]] = None)-> str:
+        # Yes, that's how you use if statements in Jinja2 templates—by using `{% if ... %} ... {% else %} ... {% endif %}` blocks. 
+        # However, make sure that when rendering, you actually pass `is_review` and `subtask` as keyword arguments to `.render()`.
+        self.user_prompt_review = Template("""
+                The spec you are working on is:
+                {{ spec }}
+
+                This is the current plot function:
+                {{ current_plot_function }}
+                
+                {% if is_review %}
+                The subtask you are reviewing is:
+                {{ subtask }}
+
+                Review the subtask and decide whether to approve it, partially approve it or reject it.
+                {% else %}
+
+                Last subtask submitted with review result of {{ review_result }}:
+                {{ subtask }}
+
+                Propose one (or more) subtask(s) for the same subitem that is being reviewed to improve the subitem acceptance criteria that are not met.
+                {% endif %}
+                """)
+        
+        return self.user_prompt_review.render(spec=str(self.spec), subtask=subtask, current_plot_function=current_plot_function, is_review=is_review, review_result=review_result)
     
     @observe(name="spec_agent.first_assignment")
     async def handle_first_assignment(self, current_plot_function: str, *_, **kwargs: Any) -> List[SubTask]:
@@ -82,24 +122,80 @@ class DataVizSupervisor(Supervisor):
             system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
             user_prompt = self.get_user_prompt_initial_assignment(current_plot_function)
 
+            context = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
             inference_result = await self.llm.acompletion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=context,
                 response_format=TaskList,
                 **self.config.llm_kwargs,
             )
 
-            return inference_result
+            initial_tasks = []
+            for task in inference_result.tasks:
+                initial_tasks.append(SubTask(
+                    subitem=self.spec.all_subitems[task.assigned_subitem_type],
+                    task_details=task,
+                    status="pending",
+                    task_error=None,
+                    task_result=None,
+                    task_context=[],
+                ))
+            return initial_tasks
         
         except Exception:
             raise RuntimeError("Error generating initial tasks")
 
     @observe(name="spec_agent.review")
     async def review(self, subtask: SubTask, *_, **kwargs: Any) -> List[SubTask]:
-        # Approve if a result exists and ok=True
-        pass
+        try:
+            # review process
+            system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
+            
+            review_result = await self.llm.acompletion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": self.get_user_prompt_review(subtask=subtask, current_plot_function=self.current_plot_function, is_review=True, review_result=None)},
+                ],
+                response_format=SubTaskReview,
+                **self.config.llm_kwargs,
+            )
+
+            # deciding wether to submit more tasks
+            if not review_result:
+                raise ValueError("Review result is required")
+            
+            if review_result.review_result == "approved":
+                return []
+            else:
+                user_prompt = self.get_user_prompt_review(current_plot_function=self.current_plot_function, subtask=subtask, is_review=True, review_result=review_result.review_result)
+                context = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+                inference_result = await self.llm.acompletion(
+                    messages=context,
+                    response_format=TaskList,
+                    **self.config.llm_kwargs,
+                )
+
+                new_tasks = []
+                for task in inference_result.tasks:
+                    new_tasks.append(SubTask(
+                        subitem=self.spec.all_subitems[task.assigned_subitem_type],
+                        task_details=task,
+                        status="pending",
+                        task_error=None,
+                        task_result=None,
+                        task_context=context + [{"role": "assistant", "content": f"A new task to complete the spec has been proposed: {str(task)}"}],
+                    ))
+                return new_tasks
+
+            
+        except Exception as e:
+            raise RuntimeError(f"Error reviewing subtask: {str(e)}")
         
 
 # --- Spec definition ---

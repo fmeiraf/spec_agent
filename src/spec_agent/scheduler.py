@@ -47,7 +47,8 @@ async def run_scheduler(
             followups = await supervisor.review(result_task)  # strictly sequential
 
             for task in followups:
-                await spawn(tg, task)
+                if rounds < max_rounds:
+                    await spawn(tg, task)
 
 
 # --- demo ---

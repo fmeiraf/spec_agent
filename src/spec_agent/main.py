@@ -4,6 +4,7 @@ from typing import Any, List, Optional
 from pydantic import BaseModel
 
 from spec_agent.actors import SubTask, Supervisor
+from spec_agent.scheduler import run_scheduler
 from spec_agent.spec import Spec
 
 logger = getLogger(__name__)
@@ -30,6 +31,15 @@ class SpecAgent:
         for key, value in kwargs.items():
             setattr(self.supervisor, key, value)
 
+        for worker in self.supervisor._workers.values():
+            worker.task_output_format = task_output_format
+            worker.spec_output_format = spec_output_format
+            worker.spec = spec
+            worker.config.llm_kwargs = kwargs.get("llm_kwargs", {})
+
+            for key, value in kwargs.items():
+                setattr(worker, key, value)
+
     async def complete_spec(
         self,
         spec: Spec,
@@ -42,8 +52,5 @@ class SpecAgent:
             spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
         )
 
-        from rich import print as rprint
-
-        rprint(initial_tasks)
-
-        # await run_scheduler(initial=generate_initial_tasks, supervisor=self.supervisor)
+        final_result = await run_scheduler(initial=initial_tasks, supervisor=self.supervisor)
+        return final_result
