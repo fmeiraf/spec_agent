@@ -42,10 +42,15 @@ class SubTask(BaseModel):
     )  # this will probably hold the message history for the subtask
 
 
+class TaskList(BaseModel):
+    tasks: List[SubTaskDetails] = Field(description="A list of tasks to complete the spec.")
+
+
 class SubTaskReview(BaseModel):
-    subtask: SubTask
-    is_approved: bool
-    review_message: str
+    review_result: Literal["approved", "partially_approved", "rejected"]
+    review_comment: str = Field(
+        description="A comment on the review result. This is a comment on the review result that is used to explain the review result."
+    )
 
 
 class Spec(BaseModel):

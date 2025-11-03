@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 from spec_agent.actors import (ActorConfig, Profile, Supervisor, Worker,
                                register_worker)
 from spec_agent.main import SpecAgent
-from spec_agent.spec import Spec, SubItem, SubTask, SubTaskDetails
+from spec_agent.spec import Spec, SubItem, SubTask, SubTaskReview, TaskList
 
-load_dotenv()
+load_dotenv()   
 
 logger = getLogger(__name__)
 
@@ -30,7 +30,7 @@ logger = getLogger(__name__)
 )
 class DataVizWorker(Worker):
     config = ActorConfig(
-        model="gpt-5-mini",
+        model="anthropic/claude-haiku-4-5",
     )
 
     def render_user_prompt(self, subtask: SubTask) -> str:
@@ -72,16 +72,11 @@ class DataVizWorker(Worker):
 
 # --- Supervisor that seeds the task and reviews results ---
 
-class TaskList(BaseModel):
-    tasks: List[SubTaskDetails] = Field(description="A list of tasks to complete the spec.")
 
-class SubTaskReview(BaseModel):
-    review_result: Literal["approved", "partially_approved", "rejected"]
-    review_comment: str = Field(description="A comment on the review result. This is a comment on the review result that is used to explain the review result.")
 
 class DataVizSupervisor(Supervisor):
     config = ActorConfig(
-        model="gpt-5-mini",
+        model="anthropic/claude-haiku-4-5",
     )
 
     def get_user_prompt_initial_assignment(self, current_plot_function: str) -> str:
@@ -204,15 +199,8 @@ class DataVizSupervisor(Supervisor):
                     **self.config.llm_kwargs,
                 )
                 
-                logger.info(f"Current spec before update: {self.spec.model_dump_json(indent=2)}")
-                print(f"************* Current spec before update: {self.spec.model_dump_json(indent=2)}")
-
                 self.spec = self.spec.merge_review(subtask, final_result=inference_result)
 
-                logger.info(f"Current spec after update: {self.spec.model_dump_json(indent=2)}")
-                print(f"************* Current spec after update: {self.spec.model_dump_json(indent=2)}")
-
-                
 
             # New task assignment phase
             
@@ -326,14 +314,14 @@ data = [
     {
         "Accurate": "68.0",
         "Whole sample": "RANDOM 1",
-        "Overestimation": "8.0",
-        "Underestimation": "24.0",
+        "Overestimation": "12.0",
+        "Underestimation": "15.0",
     },
     {
         "Accurate": "68.0",
         "Whole sample": "RAMDOM 2",
-        "Overestimation": "10.0",
-        "Underestimation": "22.0",
+        "Overestimation": "15.0",
+        "Underestimation": "12.0",
     },
     {
         "Accurate": "40.0",
@@ -343,32 +331,6 @@ data = [
     },
 ]
 
-GOAL = """
-Improve the plot so it gets the following criteria met:
-
-    ## Color Palette & Contrast
-    - Uses a deliberate, professional color system. MUST include: (1) For categorical data: uses matplotlib's 'Set2', 'Dark2', 'Pastel1' colormaps OR the specific muted palette ['#88CCEE', '#44AA99', '#117733', '#332288', '#DDCC77', '#CC6677', '#AA4499', '#DDDDDD'] OR avoids tab10 in favor of better alternatives; (2) For continuous data: uses perceptually uniform colormaps ('viridis', 'plasma', 'inferno', 'cividis', 'magma') instead of 'jet' or 'rainbow'; (3) Adequate contrast: dark colors on light backgrounds OR light colors on dark backgrounds, no low-contrast combinations; (4) Consistent application: same color represents same data category throughout the plot; (5) Limited palette: uses ≤6 distinct colors for categorical data to avoid confusion; (6) Color-blind consideration: avoids problematic red-green combinations or provides alternative visual encodings. Colors should appear intentionally chosen rather than using defaults.
-
-    ## Fonts & Text Clarity
-    - Implements consistent, readable typography throughout. MUST include: (1) Single font family used across all text elements: serif (Times New Roman, PT Serif) for academic contexts OR sans-serif (Arial, Lato) for presentations; (2) Appropriate font size hierarchy: title 12-16pt, axis labels 10-12pt, tick labels 8-10pt, legend 8-10pt, set via rcParams or individual element configuration; (3) Sufficient size for readability: text remains legible when figure is viewed at intended final size; (4) Mathematical text consistency: uses same font family for math expressions OR ensures math font (Computer Modern, STIX) harmonizes with main text; (5) No font mixing: avoids combining serif and sans-serif within same plot; (6) Proper text positioning: adequate spacing between text elements, no overlapping labels. All text should appear intentionally formatted rather than using matplotlib defaults.
-    
-    ## Axes, Grid & Background
-    - Create clean, unobtrusive axis and grid styling. MUST include: (1) Spine management: removes top and right spines (ax.spines['top'].set_visible(False), ax.spines['right'].set_visible(False)) OR uses a style that does this automatically; (2) Remaining spines styled subtly: uses gray color (#666666 or similar) instead of black, with moderate linewidth (0.8-1.2pt); (3) Grid implementation: if grids are used, they are light gray (#CCCCCC or lighter), thin (linewidth ≤1.0), and low opacity (alpha ≤0.5); (4) Background choice: white for print contexts, or consistent neutral color that doesn't compete with data; (5) Tick styling: outward-facing ticks preferred, reasonable size (not too long/short), adequate spacing from labels; (6) Labeled axsis with the quantity and its unit in parethesis for cleaner look and easy of use.
-    
-    ## Lines & Markers
-    - Renders data elements with clear, professional styling. MUST include: (1) Line weights: uses linewidth=1.2-2.0 (thicker than matplotlib default of ~1.0) for primary data lines; (2) Line differentiation: when multiple lines present, uses different styles (solid '-', dashed '--', dotted ':', dashdot '-.') not just colors; (3) Marker specifications: uses distinct marker shapes ('o', 's', '^', 'D') with reasonable size (markersize=5-8), large enough to see but not overwhelming; (4) Marker visibility: filled markers have subtle edge colors (markeredgecolor) or sufficient contrast with background; (5) Bar/area styling: bars have light edge colors or outlines to define boundaries clearly; (6) Overplotting management: uses alpha transparency (0.6-0.8) when points overlap, or reduces marker size in dense plots; (7) Smooth rendering: lines appear anti-aliased and smooth, not pixelated. Data elements should be easily distinguishable and readable at the target output size.
-    
-    ## Legend & Annotations
-    - Implements clear, well-positioned legend and annotation system. MUST include: (1) Legend placement: positioned to avoid data overlap, typically outside plot area or in empty corner using loc parameter ('upper right', 'lower left', etc.); (2) Legend styling: font size matches or is slightly smaller than axis labels (fontsize=8-11), with readable but not oversized symbols; (3) Legend content: concise, descriptive labels that clearly identify each data series (without creating too many categories - if that is need should break into subplots); (4) Legend frame: if present, uses subtle styling (framealpha=0.8-1.0, light edge color) that doesn't dominate; (5) Annotation usage: when present, annotations are purposeful and limited (≤3 per plot), with consistent styling and readable text; (6) Annotation positioning: placed to avoid data overlap, with clear connection to referenced data points.
-    
-    ## Figure Layout & Size
-    - Creates appropriately sized and well-organized figure layout. MUST include: (1) Intentional figure dimensions: uses plt.figure(figsize=(width, height)) with reasonable proportions for the intended use (e.g., 6-8 inches wide for presentations, 3-4 inches for single-column papers); (2) Proper aspect ratio: chooses aspect ratio appropriate for data type (wider for time series, square for correlations, equal aspect for geographic data); (3) Layout management: uses plt.tight_layout() or plt.subplots_adjust() to prevent text cutoffs and ensure adequate spacing; (4) Margin control: provides sufficient space around plot elements so nothing appears cramped or cut off; (5) Subplot coordination: if multiple panels present, they are aligned and consistently sized with appropriate spacing; (6) Text scaling: all text elements remain readable at the chosen figure size; (7) No wasted space: figure dimensions are efficient without excessive empty areas. The layout should appear planned and professional rather than using matplotlib defaults.
-    
-    ## Faceting & Small Multiples Usage
-    - Makes appropriate decision to use small multiples when beneficial. MUST include: (1) Justified faceting: uses subplots when there are >3-4 data series, different units/scales, or when patterns are clearer when separated; (2) Consistent formatting: all subplots use same styling, color schemes, and axis formatting; (3) Proper spacing: uses hspace/wspace parameters or plt.tight_layout() to ensure adequate separation between panels; (4) Clear panel identification: each subplot has clear titles or labels to identify what data subset it represents. The faceted design should make comparisons easier, not more confusing.
-
-For your final answer you should return a function that takes in a dataset and returns a svg string, like the current function provided to you.
-"""
 
 CURRENT_PLOT_FUNCTION = """
 def create_plot(df):`
