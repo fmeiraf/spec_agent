@@ -40,6 +40,7 @@ class SubTask(BaseModel):
     task_context: List[Dict[str, Any]] = Field(
         default_factory=list
     )  # this will probably hold the message history for the subtask
+    task_cost: float = Field(default=0.0)
 
 
 class TaskList(BaseModel):

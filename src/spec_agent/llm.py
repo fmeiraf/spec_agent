@@ -3,10 +3,16 @@ OpenAI Client wrapper specifically for GPT-5 models.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
 
 import litellm
 from langfuse import observe
+from pydantic import BaseModel
+
+
+class LLMResponse(BaseModel):
+    content: Any
+    cost: float
 
 
 class Client(ABC):
@@ -74,9 +80,18 @@ class LiteLLMClient(Client):
                 **kwargs,
             )
 
-            if kwargs.get("response_format"):
-                return kwargs["response_format"].model_validate_json(response.choices[0].message.content)
+            cost = response._hidden_params.get("response_cost", 0.0) or 0.0
 
-            return response.choices[0].message.content
+            # Always return LLMResponse with content and cost
+            if kwargs.get("response_format"):
+                parsed_model = kwargs["response_format"].model_validate_json(response.choices[0].message.content)
+                content = parsed_model
+            else:
+                content = response.choices[0].message.content
+
+            return LLMResponse(
+                content=content,
+                cost=cost,
+            )
         except Exception as e:
             raise RuntimeError(f"Error generating completion: {str(e)}")

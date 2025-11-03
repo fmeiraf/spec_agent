@@ -226,6 +226,10 @@ class Supervisor(Actor):
     ):
         super().__init__(config, llm, prompt, profile)
 
+        # Initialize cost tracking
+        self.spec_cost = 0.0
+        self.total_worker_cost = 0.0
+
         # Build and keep workers for allowed types that are registered
         self._workers: dict[str, Worker] = {}
         for actor_name, registration in WORKER_REGISTRY.items():

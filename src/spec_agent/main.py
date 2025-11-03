@@ -10,6 +10,18 @@ from spec_agent.spec import Spec
 logger = getLogger(__name__)
 
 
+class SpecResult(BaseModel):
+    """Result of completing a spec, including the spec and cost breakdown."""
+
+    spec: Spec
+    total_cost: float
+    supervisor_cost: float
+    worker_cost: float
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class SpecAgent:
     def __init__(
         self,
@@ -30,6 +42,8 @@ class SpecAgent:
         self.supervisor.spec = spec
         self.supervisor.spec_output_format = spec_output_format
         self.supervisor.task_output_format = task_output_format
+        self.supervisor.spec_cost = 0.0
+        self.supervisor.total_worker_cost = 0.0
 
         for key, value in kwargs.items():
             setattr(self.supervisor, key, value)
@@ -45,12 +59,24 @@ class SpecAgent:
         spec_output_format: BaseModel,
         task_output_format: BaseModel,
         goal_output: Any,
+        max_rounds: int = 10,
         **kwargs: Any,
-    ) -> Spec:
+    ) -> SpecResult:
         self._initialize(spec, spec_output_format, task_output_format, goal_output, **kwargs)
         initial_tasks: List[SubTask] = await self.supervisor.handle_first_assignment(
             spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
         )
 
-        await run_scheduler(initial=initial_tasks, supervisor=self.supervisor)
-        return self.supervisor.spec
+        await run_scheduler(initial=initial_tasks, supervisor=self.supervisor, max_rounds=max_rounds)
+
+        # Calculate total costs
+        supervisor_cost = getattr(self.supervisor, "spec_cost", 0.0)
+        worker_cost = getattr(self.supervisor, "total_worker_cost", 0.0)
+        total_cost = supervisor_cost + worker_cost
+
+        return SpecResult(
+            spec=self.supervisor.spec,
+            total_cost=total_cost,
+            supervisor_cost=supervisor_cost,
+            worker_cost=worker_cost,
+        )

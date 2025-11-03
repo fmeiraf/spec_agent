@@ -1,6 +1,6 @@
 import asyncio
 import json
-from logging import getLogger
+import logging
 from typing import Any, List, Literal, Optional
 
 from dotenv import load_dotenv
@@ -15,7 +15,13 @@ from spec_agent.spec import Spec, SubItem, SubTask, SubTaskReview, TaskList
 
 load_dotenv()   
 
-logger = getLogger(__name__)
+# Configure logging to show INFO level messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+logger = logging.getLogger(__name__)
 
 # --- Worker implementation for data visualization ---
 
@@ -30,7 +36,7 @@ logger = getLogger(__name__)
 )
 class DataVizWorker(Worker):
     config = ActorConfig(
-        model="anthropic/claude-haiku-4-5",
+        model="xai/grok-4-fast-reasoning",
     )
 
     def render_user_prompt(self, subtask: SubTask) -> str:
@@ -50,11 +56,13 @@ class DataVizWorker(Worker):
     @observe(name="spec_agent.worker.perform_work")
     async def perform_work(self, subtask: SubTask, spec: Spec, **_: Any) -> SubTask:
         try:
-            inference_result = await self.llm.acompletion(
-                messages=subtask.task_context + [
+            context = [
                     {"role": "system", "content": self.render_system_prompt(specialty=self.profile.specialty, answer_format=spec.task_output_format.model_json_schema())},
                     {"role": "user", "content": self.render_user_prompt(subtask=subtask)},
-                ],
+                ] if not subtask.task_context else subtask.task_context + [ {"role": "user", "content": self.render_user_prompt(subtask=subtask)}]
+                
+            inference_result = await self.llm.acompletion(
+                messages=context,
                 response_format=spec.task_output_format,
                 **self.config.llm_kwargs,
             )
@@ -63,7 +71,8 @@ class DataVizWorker(Worker):
                 id=subtask.id,
                 subitem=subtask.subitem,
                 task_details=subtask.task_details,
-                task_result=inference_result,
+                task_result=inference_result.content,
+                task_cost=inference_result.cost,
                 task_context=subtask.task_context + [{"role": "user", "content": inference_result}],
                 status="completed",
             )
@@ -76,7 +85,7 @@ class DataVizWorker(Worker):
 
 class DataVizSupervisor(Supervisor):
     config = ActorConfig(
-        model="anthropic/claude-haiku-4-5",
+        model="xai/grok-4-fast-reasoning",
     )
 
     def get_user_prompt_initial_assignment(self, current_plot_function: str) -> str:
@@ -122,7 +131,11 @@ class DataVizSupervisor(Supervisor):
     @observe(name="spec_agent.first_assignment")
     async def handle_first_assignment(self, *_, **kwargs: Any) -> List[SubTask]:
         try:
-            system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
+            system_prompt = self.render_system_prompt(
+                spec_object=self.spec.__class__.model_json_schema(),
+                workers=self.get_workers_string(),
+                answer_format=self.spec.spec_output_format.model_json_schema()
+            )
             user_prompt = self.get_user_prompt_initial_assignment(self.spec.final_result)
 
             context = [
@@ -135,9 +148,12 @@ class DataVizSupervisor(Supervisor):
                 response_format=TaskList,
                 **self.config.llm_kwargs,
             )
+            
+            # Track supervisor cost
+            self.spec_cost += inference_result.cost
 
             initial_tasks = []
-            for task in inference_result.tasks:
+            for task in inference_result.content.tasks:
                 initial_tasks.append(SubTask(
                     subitem=self.spec.all_subitems[task.assigned_subitem_type],
                     task_details=task,
@@ -155,7 +171,7 @@ class DataVizSupervisor(Supervisor):
     async def review(self, subtask: SubTask, *_, **kwargs: Any) -> List[SubTask]:
         try:
             # review process
-            system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
+            system_prompt = self.render_system_prompt(spec_object=self.spec.__class__.model_json_schema(), workers=self.get_workers_string())
             
             review_result = await self.llm.acompletion(
                 messages=[
@@ -165,13 +181,15 @@ class DataVizSupervisor(Supervisor):
                 response_format=SubTaskReview,
                 **self.config.llm_kwargs,
             )
-
             
-            if not review_result:
+            # Track supervisor cost
+            self.spec_cost += review_result.cost
+            
+            if not review_result.content:
                 raise ValueError("Review result is required")
 
             # Merge phase
-            if review_result.review_result in ["approved", "partially_approved"]:
+            if review_result.content.review_result in ["approved", "partially_approved"]:
                 merge_system_prompt = """
                 You will be given a initial plotion function and a new code diff that improves the plot function.
 
@@ -181,6 +199,8 @@ class DataVizSupervisor(Supervisor):
                 There might be differences between the diff base function and the initial plot function, as potential changes might have been made after the diff was genreted. 
                 In those cases try to extract the intention of the diff and merge it into the initial plot function in way that addresses the intended changes.
                 Even though the root function of the diff might be out of sync, these diffs are supposed to be applied to very specific parts of the initial plot function and address specific functions of it. Make sure you capture that.
+
+                Make sure you return a valid plot function that takes a pandas dataframe and returns a svg string. Pay extreme attetion to identation so I can copy and paste it into the code editor.
                 """
                 merge_prompt = Template("""
                 The initial plot function is:
@@ -199,16 +219,19 @@ class DataVizSupervisor(Supervisor):
                     **self.config.llm_kwargs,
                 )
                 
-                self.spec = self.spec.merge_review(subtask, final_result=inference_result)
+                # Track supervisor cost
+                self.spec_cost += inference_result.cost
+                
+                self.spec = self.spec.merge_review(subtask, final_result=inference_result.content)
 
 
             # New task assignment phase
             
-            if review_result.review_result == "approved":
+            if review_result.content.review_result == "approved":
                 return []
             else:
-                system_prompt = self.render_system_prompt(spec_object=self.spec.model_dump_json(indent=2), workers=self.get_workers_string())
-                user_prompt = self.get_user_prompt_review(current_plot_function=self.spec.final_result, subtask=subtask, is_review=True, review_result=review_result.review_result)
+                system_prompt = self.render_system_prompt(spec_object=self.spec.__class__.model_json_schema(), workers=self.get_workers_string())
+                user_prompt = self.get_user_prompt_review(current_plot_function=self.spec.final_result, subtask=subtask, is_review=True, review_result=review_result.content.review_result)
                 context = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -218,9 +241,12 @@ class DataVizSupervisor(Supervisor):
                     response_format=TaskList,
                     **self.config.llm_kwargs,
                 )
+                
+                # Track supervisor cost
+                self.spec_cost += inference_result.cost
 
                 new_tasks = []
-                for task in inference_result.tasks:
+                for task in inference_result.content.tasks:
                     new_tasks.append(SubTask(
                         subitem=self.spec.all_subitems[task.assigned_subitem_type],
                         task_details=task,
@@ -560,11 +586,22 @@ def create_plot(df):`
 
 @observe(name="spec_agent")
 async def main() -> None:
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
     agent = SpecAgent(supervisor=DataVizSupervisor())
-    result = await agent.complete_spec(spec=VizSpec, spec_output_format=SpecOutputFormat, task_output_format=TaskOutputFormat, goal_output=SpecOutputFormat(plot_function=CURRENT_PLOT_FUNCTION), data_frame=data)
+    completed_spec = await agent.complete_spec(spec=VizSpec, spec_output_format=SpecOutputFormat, task_output_format=TaskOutputFormat, goal_output=SpecOutputFormat(plot_function=CURRENT_PLOT_FUNCTION), data_frame=data, max_rounds=25)
 
     from rich import print as rprint
-    rprint(result)
+    print(" ===== FINAL FUNCTION ===== \n")
+    rprint(completed_spec.spec.final_result['plot_function'])
+
+    print(" ===== COST BREAKDOWN ===== \n")
+    rprint(f"Total Cost: ${completed_spec.total_cost:.4f}")
+    rprint(f"Supervisor Cost: ${completed_spec.supervisor_cost:.4f}")
+    rprint(f"Worker Cost: ${completed_spec.worker_cost:.4f}")
+
+    print("\n ===== FINAL SPEC ===== \n")
+    rprint(completed_spec.spec.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":
