@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [{ name = "Fernando Meira", email = "fmeira.filho@gmail.com" }]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "jinja2>=3.1.6",
     "litellm>=1.79.0",
