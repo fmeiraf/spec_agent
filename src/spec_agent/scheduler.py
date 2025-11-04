@@ -1,12 +1,10 @@
 import asyncio
 from asyncio import TaskGroup
-from logging import getLogger
 from typing import Iterable
 
 from spec_agent.actors import Supervisor
 from spec_agent.spec import Spec, SubTask
-
-logger = getLogger(__name__)
+from spec_agent.ui import SchedulerUI, console
 
 
 async def run_scheduler(
@@ -24,23 +22,14 @@ async def run_scheduler(
 
     def log_pending_reviews():
         """Log current tasks waiting for review."""
-        if pending_reviews:
-            task_list = "\n".join(
-                [
-                    f"  - Task {task.id} (type: {task.subitem.type}, status: {task.status})"
-                    for task in pending_reviews.values()
-                ]
-            )
-            logger.info(f"📝 Tasks waiting for review ({len(pending_reviews)}):\n{task_list}")
-        else:
-            logger.info("📝 No tasks currently waiting for review")
+        console.print(SchedulerUI.pending_reviews_card(pending_reviews))
 
     async def spawn(tg: TaskGroup, task: SubTask, spec: Spec):
         nonlocal in_flight, rounds
         await worker_sem.acquire()
         in_flight += 1
         rounds += 1
-        logger.info(f"🔄 Assigning worker to task {task.id} (type: {task.subitem.type})")
+        console.print(SchedulerUI.worker_card(task.id, task.subitem.type))
 
         async def runner():
             nonlocal in_flight
@@ -55,9 +44,7 @@ async def run_scheduler(
                 pending_reviews[result_task.id] = result_task
 
                 # Log when worker finishes and task is waiting for review
-                logger.info(
-                    f"⏳ Worker finished task {result_task.id} (type: {result_task.subitem.type}) - waiting for review"
-                )
+                console.print(SchedulerUI.worker_complete_card(result_task.id, result_task.subitem.type))
                 log_pending_reviews()
             finally:
                 in_flight -= 1
@@ -81,14 +68,12 @@ async def run_scheduler(
             # Remove from pending reviews tracking
             pending_reviews.pop(result_task.id, None)
 
-            logger.info(f"📋 Reviewing task {result_task.id}")
+            console.print(SchedulerUI.review_card(result_task.id))
             # supervisor.review returns List[SubTask] and tracks its own costs internally
             followups = await supervisor.review(result_task)  # strictly sequential
 
-            if followups:
-                logger.info(f"✅ Review complete for {result_task.id} → {len(followups)} follow-up task(s)")
-            else:
-                logger.info(f"✅ Review complete for {result_task.id} → no follow-ups")
+            followup_count = len(followups) if followups else None
+            console.print(SchedulerUI.review_complete_card(result_task.id, followup_count))
 
             for task in followups:
                 if rounds < max_rounds:

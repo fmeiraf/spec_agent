@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from spec_agent.actors import SubTask, Supervisor
 from spec_agent.scheduler import run_scheduler
 from spec_agent.spec import Spec
+from spec_agent.ui import SchedulerUI, console
 
 logger = getLogger(__name__)
 
@@ -63,9 +64,15 @@ class SpecAgent:
         **kwargs: Any,
     ) -> SpecResult:
         self._initialize(spec, spec_output_format, task_output_format, goal_output, **kwargs)
-        initial_tasks: List[SubTask] = await self.supervisor.handle_first_assignment(
-            spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
-        )
+
+        # Show loading status while initializing tasks
+        with SchedulerUI.initializing_status():
+            initial_tasks: List[SubTask] = await self.supervisor.handle_first_assignment(
+                spec=spec, spec_output_format=spec_output_format, task_output_format=task_output_format, **kwargs
+            )
+
+        # Show completion message
+        console.print(SchedulerUI.initialization_complete_card(len(initial_tasks)))
 
         await run_scheduler(initial=initial_tasks, supervisor=self.supervisor, max_rounds=max_rounds)
 
