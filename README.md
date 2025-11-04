@@ -26,6 +26,53 @@ Things I see as limitations:
 - The review phase will very rapidly become a bottleneck - as it works sequentially. The merging phase is something complex for multi agent systems and depending on the task could be a big limitation
 - Dedicated agents can be very shalow on their actions without correct context and prompting - so it does require iteration for good results
 
+## Try Now
+
+![Spec Agent Terminal Demo](./doc/terminal.png)
+
+Want to see Spec Agent in action? Here's how to run the data visualization improvement example:
+
+The example requires the package itself plus additional dev dependencies:
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd spec_agent
+
+# Install with dev dependencies using uv (recommended)
+uv pip install -e ".[dev]"
+
+# Or using pip 24.0+ (supports dependency groups)
+pip install -e ".[dev]"
+
+# Or install manually
+pip install -e .
+pip install langfuse pandas python-dotenv
+```
+
+### 2. Set Up Environment Variables
+
+The example uses LiteLLM for LLM access. Create a `.env` file in the project root with your API keys:
+
+```bash
+# For X.AI Grok (used in the example)
+XAI_API_KEY=your_xai_api_key_here
+
+# Optional: If you want to use Langfuse for observability
+LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
+LANGFUSE_SECRET_KEY=your_langfuse_secret_key
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+**Note**: The example uses `xai/grok-4-fast-reasoning` model. You can modify the model in the example code if you prefer a different provider (OpenAI, Anthropic, etc.).
+
+### 3. Run the Example
+
+```bash
+# From the project root directory
+python examples/create_data_visualization.py
+```
+
 ## Introduction
 
 Spec Agent addresses the challenge of completing complex, multi-dimensional specifications using LLMs. Instead of asking a single model to handle everything at once, Spec Agent:
@@ -112,95 +159,6 @@ The **Scheduler** manages the execution flow:
 - Collects completed tasks into a review queue
 - Ensures reviews happen sequentially (maintaining order)
 - Continues until all criteria are met or `max_rounds` is reached
-
-## Try Now
-
-Want to see Spec Agent in action? Here's how to run the data visualization improvement example:
-
-### 1. Install the Package and Development Dependencies
-
-The example requires the package itself plus additional dev dependencies:
-
-**Option A: Install from source (for development)**
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd spec_agent
-
-# Install with dev dependencies using uv (recommended)
-uv pip install -e ".[dev]"
-
-# Or using pip 24.0+ (supports dependency groups)
-pip install -e ".[dev]"
-
-# Or install manually
-pip install -e .
-pip install langfuse pandas python-dotenv
-```
-
-**Option B: Install from PyPI (if published)**
-
-```bash
-pip install spec-agent
-pip install langfuse pandas python-dotenv
-```
-
-### 2. Set Up Environment Variables
-
-The example uses LiteLLM for LLM access. Create a `.env` file in the project root with your API keys:
-
-```bash
-# For X.AI Grok (used in the example)
-XAI_API_KEY=your_xai_api_key_here
-
-# Optional: If you want to use Langfuse for observability
-LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
-LANGFUSE_SECRET_KEY=your_langfuse_secret_key
-LANGFUSE_HOST=https://cloud.langfuse.com
-```
-
-**Note**: The example uses `xai/grok-4-fast-reasoning` model. You can modify the model in the example code if you prefer a different provider (OpenAI, Anthropic, etc.).
-
-### 3. Run the Example
-
-```bash
-# From the project root directory
-python examples/create_data_visualization.py
-```
-
-### 4. What to Expect
-
-When you run the example, you'll see:
-
-1. **Initial Assignment**: The supervisor analyzes the current plot function and creates initial tasks for multiple workers (axis and grid, fonts, colors, etc.)
-
-2. **Parallel Execution**: Workers start processing tasks in parallel - you'll see logs like:
-
-   ```
-   🔄 Assigning worker to task <task-id> (type: axis_and_grid)
-   ⏳ Worker finished task <task-id> - waiting for review
-   ```
-
-3. **Sequential Review**: Completed tasks are reviewed one by one:
-
-   ```
-   📋 Reviewing task <task-id>
-   ✅ Review complete for <task-id> → 0 follow-up task(s)
-   ```
-
-4. **Final Result**: The script prints:
-   - The improved plot function (as Python code)
-   - Cost breakdown (supervisor vs worker costs)
-   - The final spec state (as JSON)
-
-The example typically takes several minutes to complete, depending on your LLM provider and API rate limits. With 7 specialized workers and up to 25 rounds, expect multiple iterations of review and refinement.
-
-### Troubleshooting
-
-- **Import errors**: Make sure you've installed the package in development mode (`pip install -e .`) or installed all dependencies
-- **API key errors**: Verify your `.env` file is in the project root and contains valid API keys
-- **Module not found**: Ensure you're running from the project root directory or have `spec_agent` in your Python path
 
 ## Quick Start
 
