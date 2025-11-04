@@ -326,34 +326,34 @@ VizSpec = Spec(
 
 data = [
     {
-        "Accurate": "80.0",
-        "Whole sample": "Korth",
-        "Overestimation": "4.0",
-        "Underestimation": "16.0",
+        "Accurate": "82.0",
+        "Whole sample": "Method Alpha",
+        "Overestimation": "5.0",
+        "Underestimation": "13.0",
     },
     {
-        "Accurate": "76.0",
-        "Whole sample": "Harris-Benedict",
+        "Accurate": "74.0",
+        "Whole sample": "Method Beta",
         "Overestimation": "0.0",
-        "Underestimation": "24.0",
+        "Underestimation": "26.0",
     },
     {
-        "Accurate": "68.0",
-        "Whole sample": "RANDOM 1",
-        "Overestimation": "12.0",
-        "Underestimation": "15.0",
+        "Accurate": "71.0",
+        "Whole sample": "Method Gamma",
+        "Overestimation": "11.0",
+        "Underestimation": "18.0",
     },
     {
-        "Accurate": "68.0",
-        "Whole sample": "RAMDOM 2",
-        "Overestimation": "15.0",
-        "Underestimation": "12.0",
+        "Accurate": "69.0",
+        "Whole sample": "Method Delta",
+        "Overestimation": "14.0",
+        "Underestimation": "17.0",
     },
     {
-        "Accurate": "40.0",
-        "Whole sample": "Mifflin-St. Jeor",
+        "Accurate": "43.0",
+        "Whole sample": "Method Epsilon",
         "Overestimation": "0.0",
-        "Underestimation": "60.0",
+        "Underestimation": "57.0",
     },
 ]
 
